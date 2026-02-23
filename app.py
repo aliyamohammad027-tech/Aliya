@@ -1,105 +1,146 @@
-from flask import Flask , request , jsonify
+from flask import Flask, request, jsonify,render_template
 import psycopg2
 from psycopg2 import sql
+from flask_bcrypt import Bcrypt
+import jwt
+import datetime
 
-app = Flask(__name__)
+app = Flask(__name__, template_folder='templates')
 
-#database configuration
-DB_HOST='localhost'
-DB_NAME='postgres'
-DB_USER='postgres'
-DB_PASSWORD='1227'
+bcrypt = Bcrypt(app)
+
+# Secret Key
+SECRET_KEY = "this is my secret key this is my secret key!!"
+
+# JWT Functions
+def create_jwt(user_id, username):
+    payload = {
+        "user_id": user_id,
+        "username": username,
+        "exp": datetime.datetime.utcnow() + datetime.timedelta(minutes=20)
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm="HS256")
+
+def verify_jwt(token):
+    try:
+        return jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+    except:
+        return None
+
+# Database Configuration
+DB_HOST = 'localhost'
+DB_NAME = 'postgres'
+DB_USER = 'postgres'
+DB_PASSWORD = '1227'
 
 def get_db_connection():
-    connection=psycopg2.connect(
-    host=DB_HOST,
-    database=DB_NAME,
-    user=DB_USER,
-    password=DB_PASSWORD
-)
-    return connection
-def create_tb_if_not_exist():
-    connection = get_db_connection()
-    cursor = connection.cursor()
-  
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS users(
-    user_id SERIAL PRIMARY KEY,
-    username TEXT NOT NULL,
-    password TEXT NOT NULL,
-    email TEXT NOT NULL
-        );   
+    return psycopg2.connect(
+        host=DB_HOST,
+        database=DB_NAME,
+        user=DB_USER,
+        password=DB_PASSWORD
+    )
+
+# Create Users Table
+def create_users_table():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS users_dbs(
+            user_id SERIAL PRIMARY KEY,
+            username TEXT NOT NULL,
+            password TEXT NOT NULL,
+            email TEXT UNIQUE NOT NULL
+        );
     """)
-    connection.commit()
-    cursor.close()
-    connection.close()
-create_tb_if_not_exist()
+    conn.commit()
+    cur.close()
+    conn.close()
 
-@app.route("/user_register", methods=['POST'])
-def user_register():
-    username = request.json['username']
-    password = request.json['password']
-    email = request.json['email']
-    connection = get_db_connection()
-    cursor = connection.cursor()
-    cursor.execute("""
-         INSERT INTO users(username, password, email)
-         VALUES(%s, %s, %s)
-""", (username, password, email))
-    connection.commit()
-    cursor.close()
-    connection.close()
-    return jsonify({"message":"User registered successfully"}),200
+@app.route("/")
+def index():
+    return render_template('login.html')
+@app.route("/login_page")
+def login_page():
+    return render_template('login.html')
 
-@app.route("/get_users",methods = ['GET'])
-def get_users():
-    connection = get_db_connection()
-    cursor = connection.cursor()
-    cursor.execute("""
-             SELECT * FROM users;
-    """)
-    user_id = cursor.fetchall()
-    cursor.close()
-    connection.close()
-    result =[
-            {"user_id":user[0],
-            "username":user[1],
-            "password":user[2],
-            "email":user[3]} for user in user_id
-    ]
-    return jsonify(result),200
+@app.route("/signup_page")
+def signup_page():
+    return render_template('signup.html')
 
-@app.route('/user_update',methods = ['PUT'])
-def user_update():
-    user_id = request.args.get('user_id')
-    username = request.json['username']
-    password = request.json['password']
-    email = request.json['email']
-    connection = get_db_connection()
-    cursor = connection.cursor()
-    cursor.execute("""
-          UPDATE users
-                    SET username=%s, password = %s,email = %s where user_id = %s;
-""",(username,password,email,user_id))
-    connection.commit()
-    cursor.close()
-    connection.close()
-    return jsonify({"message":"user update successfully"}),201
+@app.route("/dashboard_page")
+def dashboard_page():
+    return render_template('dashboard.html')
+
+# SIGNUP
+@app.route("/signup", methods=["POST"])
+def signup():
+    data = request.json
+    username = data.get("username")
+    email = data.get("email")
+    password = data.get("password")
+
+    hashed = bcrypt.generate_password_hash(password).decode("utf-8")
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO users_dbs(username,email,password)
+        VALUES(%s,%s,%s) 
+        RETURNING user_id
+    """, (username, email, hashed))
+    user_id = cur.fetchone()[0]
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    token = create_jwt(user_id, username)
+    return jsonify({"message": "Signup successful", "token": token})
+
+# LOGIN API 
+@app.route("/login", methods=["POST"])
+def login():
+
+    data = request.json
+
+    email = data.get("email")
+    password = data.get("password")
+
+    if not email or not password:
+        return jsonify({"error": "All fields required"}), 400
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT user_id, username, password
+        FROM users_dbs
+        WHERE email = %s
+    """, (email,))
+    user = cur.fetchone()
+    cur.close()
+    conn.close()
+
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
+    user_id, username, hashed_password = user
+
+    # Verify Password
+    if not bcrypt.check_password_hash(hashed_password, password):
+        return jsonify({"error": "Invalid password"}), 401
+
+    # Create Token
+    token = create_jwt(user_id, username)
+
+    return jsonify({
+        "message": "Login successful",
+        "token": token,
+        "user": {
+            "user_id": user_id,
+            "username": username,
+            "email": email
+        }
+    }), 200
 
 
-@app.route('/delete_user',methods=['DELETE'])
-def delete_user():
-    user_id = request.args.get('user_id')
-    connection = get_db_connection()
-    cursor = connection.cursor()
-    cursor.execute("""
-        DELETE FROM users WHERE user_id=%s;
-    """,(user_id,))
-    connection.commit()
-    cursor.close()
-    connection.close()
-    return jsonify({"message":"user deleted successfully"}),200
-
-
-if  __name__=='__main__':
-   app.run(debug = True)
+if __name__ == "__main__":
+    app.run(debug=True)

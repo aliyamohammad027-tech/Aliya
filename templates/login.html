@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Login</title>
+    <style>
+        body { font-family: Arial; background: #f2f2f2; }
+        .box {
+            width: 350px; margin: 100px auto; background: white;
+            padding: 20px; border-radius: 10px;
+        }
+        input, button {
+            width: 100%; padding: 10px; margin: 10px 0;
+        }
+        button { background: blue; color: white; border: none; }
+    </style>
+</head>
+<body>
+
+<div class="box">
+    <h2>Login</h2>
+    <input id="email" placeholder="Email">
+    <input id="password" type="password" placeholder="Password">
+    <button onclick="login()">Login</button>
+    <a href="{{ url_for('signup_page') }}">signup</a>
+</div>
+
+<script>
+function login() {
+    fetch("http://127.0.0.1:5000/login", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+            email: email.value,
+            password: password.value
+        })
+    })
+    .then(res => res.json())
+    .then(data => {
+        if(data.token){
+            localStorage.setItem("token", data.token);
+            window.location.href = "/dashboard_page";
+        } else {
+            alert(data.error);
+        }
+    });
+}
+</script>
+
+</body>
+</html>
